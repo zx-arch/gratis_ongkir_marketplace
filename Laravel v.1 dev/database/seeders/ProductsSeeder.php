@@ -23,7 +23,7 @@ class ProductsSeeder extends Seeder
             }
 
             // Memasukkan data ke dalam tabel products dengan pengecekan
-            $existingProducts = Products::whereIn('name', collect($this->data())->lockForUpdate()->pluck('name'))->get()->keyBy('name');
+            $existingProducts = Products::whereIn('name', collect($this->data())->pluck('name'))->get()->keyBy('name');
 
             foreach ($this->data() as $product) {
                 if (isset($existingProducts[$product['name']])) {
@@ -31,7 +31,11 @@ class ProductsSeeder extends Seeder
                     $existingProducts[$product['name']]->update($product);
                 } else {
                     // Jika produk belum ada, buat baru
-                    Products::create($product);
+                    $products = Products::create($product);
+                    $products->update([
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
                 }
             }
 

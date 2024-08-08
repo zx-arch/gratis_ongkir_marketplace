@@ -13,11 +13,12 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        // konsistensi data antar dan masing-masing seeder
         DB::beginTransaction();
 
         try {
             // Menjalankan seeder lain
-            $this->call([ProductsSeeder::class]);
+            $this->call([ProductsSeeder::class, SampleUserSeeder::class]);
             DB::commit();
 
         } catch (Throwable $e) {
