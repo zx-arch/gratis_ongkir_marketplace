@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Tymon\JWTAuth\Facades\JWTAuth;
 
@@ -18,15 +18,30 @@ class AuthController extends Controller
             'password' => 'required|string|min:6|confirmed',
         ]);
 
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-        ]);
+        DB::beginTransaction();
 
-        $token = JWTAuth::fromUser($user, ['exp' => strtotime('+1 year')]);
+        try {
+            $user = User::create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+            ]);
 
-        return response()->json(compact('user', 'token'), 201);
+            $token = JWTAuth::fromUser($user, ['exp' => strtotime('+1 year')]);
+
+            DB::commit();
+            return response()->json(compact('user', 'token'), 201);
+
+        } catch (\Throwable $e) {
+
+            DB::rollBack();
+
+            return response()->json([
+                'error' => 'Failed to register user.',
+                'message' => $e->getMessage(),
+                'code' => $e->getCode(),
+            ], $e->getCode() ?? 500);
+        }
     }
 
     public function login(Request $request)

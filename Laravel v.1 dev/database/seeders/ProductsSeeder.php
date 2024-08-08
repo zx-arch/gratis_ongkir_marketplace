@@ -14,6 +14,8 @@ class ProductsSeeder extends Seeder
      */
     public function run(): void
     {
+        DB::beginTransaction();
+
         try {
             // Menghapus semua data dari tabel hanya jika sudah ada record tabel agar bisa langsung tambah data di array
             if (DB::table('products')->count() > 0) {
@@ -21,14 +23,23 @@ class ProductsSeeder extends Seeder
             }
 
             // Memasukkan data ke dalam tabel products dengan pengecekan
+            $existingProducts = Products::whereIn('name', collect($this->data())->lockForUpdate()->pluck('name'))->get()->keyBy('name');
+
             foreach ($this->data() as $product) {
-                Products::updateOrCreate(
-                    ['name' => $product['name']],
-                    $product
-                );
+                if (isset($existingProducts[$product['name']])) {
+                    // Jika produk sudah ada, perbarui
+                    $existingProducts[$product['name']]->update($product);
+                } else {
+                    // Jika produk belum ada, buat baru
+                    Products::create($product);
+                }
             }
 
+            DB::commit();
+
         } catch (\Throwable $e) {
+            DB::rollBack();
+
             \Log::error('Error seeding products: ' . $e->getMessage(), ['exception' => $e]);
             echo 'Error seeding products: ' . $e->getMessage() . "\n";
         }
