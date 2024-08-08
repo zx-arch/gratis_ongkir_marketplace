@@ -17,11 +17,6 @@ class ProductsSeeder extends Seeder
         DB::beginTransaction();
 
         try {
-            // Menghapus semua data dari tabel hanya jika sudah ada record tabel agar bisa langsung tambah data di array
-            if (DB::table('products')->count() > 0) {
-                DB::table('products')->truncate();
-            }
-
             // Memasukkan data ke dalam tabel products dengan pengecekan
             $existingProducts = Products::whereIn('name', collect($this->data())->pluck('name'))->get()->keyBy('name');
 

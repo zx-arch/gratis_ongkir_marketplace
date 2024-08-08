@@ -17,11 +17,6 @@ class SampleUserSeeder extends Seeder
         DB::beginTransaction();
 
         try {
-            // Menghapus semua data dari tabel users hanya jika sudah ada record tabel agar bisa langsung tambah data di array
-            if (DB::table('users')->count() > 0) {
-                DB::table('users')->truncate();
-            }
-
             // Memasukkan data ke dalam tabel users dengan pengecekan
             $existingUser = User::whereIn('email', collect($this->data())->pluck('email'))->get()->keyBy('email');
 
