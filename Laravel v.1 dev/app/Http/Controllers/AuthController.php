@@ -24,7 +24,7 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        $token = JWTAuth::fromUser($user);
+        $token = JWTAuth::fromUser($user, ['exp' => strtotime('+1 year')]);
 
         return response()->json(compact('user', 'token'), 201);
     }
@@ -45,7 +45,7 @@ class AuthController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'bearer',
-            'expires_in' => auth('api')->factory()->getTTL() * 60
+            'expires_in' => 9999999
         ]);
     }
 
