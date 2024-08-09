@@ -12,7 +12,7 @@ class CartAPIController extends Controller
 {
     public function index()
     {
-        $carts = Carts::where('user_id', Auth::id())->get();
+        $carts = Carts::where('user_id', Auth::id())->with('product')->get();
         return response()->json($carts);
     }
 
@@ -33,7 +33,7 @@ class CartAPIController extends Controller
             ]);
 
             DB::commit();
-            return response()->json($cart, 201);
+            return response()->json([$cart], 200);
 
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -48,8 +48,8 @@ class CartAPIController extends Controller
 
     public function show($id)
     {
-        $cart = Carts::where('user_id', Auth::id())->findOrFail($id);
-        return response()->json($cart);
+        $cart = Carts::where('user_id', Auth::id())->where('id', $id)->with('product')->first();
+        return response()->json([$cart]);
     }
 
     public function update(Request $request, $id)
@@ -84,10 +84,14 @@ class CartAPIController extends Controller
         DB::beginTransaction();
 
         try {
-            Carts::where('user_id', Auth::id())->findOrFail($id)->lockForUpdate()->delete();
+            Carts::where('user_id', Auth::id())->where('id', $id)->lockForUpdate()->delete();
 
             DB::commit();
-            return response()->json(null, 204);
+
+            return response()->json([
+                'message' => 'Data berhasil dihapus!',
+                'code' => 200
+            ]);
 
         } catch (\Throwable $e) {
             DB::rollBack();

@@ -30,7 +30,7 @@ class AuthController extends Controller
             $token = JWTAuth::fromUser($user, ['exp' => strtotime('+1 year')]);
 
             DB::commit();
-            return response()->json(compact('user', 'token'), 201);
+            return response()->json(compact('user', 'token'), 200);
 
         } catch (\Throwable $e) {
 
