@@ -18,10 +18,29 @@ class CartAPIController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
-            'product_id' => 'required|integer',
+        $rules = [
+            'product_id' => 'required|integer|exists:products,id',
             'quantity' => 'required|integer',
-        ]);
+        ];
+
+        // Pesan kesalahan validasi kustom
+        $messages = [
+            'product_id.required' => 'ID produk harus diisi.',
+            'product_id.integer' => 'Setiap ID produk harus berupa angka bulat.',
+            'product_id.*.exists' => 'ID produk tidak ada dalam tabel produk.',
+            'quantity.required' => 'Kuantitas harus diisi.',
+            'quantity.integer' => 'Setiap kuantitas harus berupa angka bulat.'
+        ];
+
+        // Validasi data permintaan
+        $validator = \Validator::make($request->all(), $rules, $messages);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Validasi gagal.',
+                'messages' => $validator->errors(),
+            ], 422);
+        }
 
         DB::beginTransaction();
 
@@ -33,16 +52,16 @@ class CartAPIController extends Controller
             ]);
 
             DB::commit();
-            return response()->json([$cart], 200);
 
-        } catch (\Throwable $e) {
+            return response()->json($cart, 200);
+
+        } catch (\Exception $e) {
             DB::rollBack();
 
             return response()->json([
                 'error' => 'Error create cart.',
                 'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-            ], $e->getCode() ?? 500);
+            ], 500);
         }
     }
 
@@ -54,9 +73,27 @@ class CartAPIController extends Controller
 
     public function update(Request $request, $id)
     {
-        $request->validate([
+        $rules = [
             'quantity' => 'required|integer',
-        ]);
+        ];
+
+        // Pesan kesalahan validasi kustom
+        $messages = [
+            'quantity.required' => 'Quantity harus diisi.',
+            'quantity.integer' => 'Setiap quantity harus berupa angka bulat.',
+            'quantity.*.min' => 'Quantity harus minimal 1.',
+            'quantity.*.max' => 'Quantity tidak boleh lebih dari 100.',
+        ];
+
+        // Validasi data permintaan
+        $validator = \Validator::make($request->all(), $rules, $messages);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Validasi gagal.',
+                'messages' => $validator->errors(),
+            ], 422);
+        }
 
         DB::beginTransaction();
 
@@ -67,7 +104,7 @@ class CartAPIController extends Controller
             DB::commit();
             return response()->json($cart);
 
-        } catch (\Throwable $e) {
+        } catch (\Exception $e) {
             DB::rollBack();
 
             return response()->json([
@@ -93,7 +130,7 @@ class CartAPIController extends Controller
                 'code' => 200
             ]);
 
-        } catch (\Throwable $e) {
+        } catch (\Exception $e) {
             DB::rollBack();
 
             return response()->json([
