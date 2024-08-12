@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Carts;
+use App\Models\Products;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 
@@ -18,48 +19,105 @@ class CartAPIController extends Controller
 
     public function store(Request $request)
     {
-        $rules = [
-            'product_id' => 'required|integer|exists:products,id',
-            'quantity' => 'required|integer',
-        ];
+        // Determine if the request contains a single item or multiple items
+        if ($request->has('data')) {
+            // Multiple items case
+            $rules = [
+                'data' => 'required|array',
+                'data.*.product_id' => 'required|integer|exists:products,id',
+                'data.*.quantity' => 'required|integer|min:1',
+            ];
 
-        // Pesan kesalahan validasi kustom
-        $messages = [
-            'product_id.required' => 'ID produk harus diisi.',
-            'product_id.integer' => 'Setiap ID produk harus berupa angka bulat.',
-            'product_id.*.exists' => 'ID produk tidak ada dalam tabel produk.',
-            'quantity.required' => 'Kuantitas harus diisi.',
-            'quantity.integer' => 'Setiap kuantitas harus berupa angka bulat.'
-        ];
+            // Custom validation error messages for multiple items
+            $messages = [
+                'data.required' => 'Data produk harus diisi.',
+                'data.array' => 'Data produk harus berupa array.',
+                'data.*.product_id.required' => 'ID produk harus diisi.',
+                'data.*.product_id.integer' => 'ID produk harus berupa angka bulat.',
+                'data.*.product_id.exists' => 'ID produk tidak ada dalam tabel produk.',
+                'data.*.quantity.required' => 'Kuantitas harus diisi.',
+                'data.*.quantity.integer' => 'Kuantitas harus berupa angka bulat.',
+                'data.*.quantity.min' => 'Kuantitas harus lebih besar dari 0.',
+            ];
 
-        // Validasi data permintaan
-        $validator = \Validator::make($request->all(), $rules, $messages);
+            // Validate the request for multiple items
+            $validator = \Validator::make($request->all(), $rules, $messages);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'error' => 'Validasi gagal.',
-                'messages' => $validator->errors(),
-            ], 422);
+            if ($validator->fails()) {
+                return response()->json([
+                    'error' => 'Validasi gagal.',
+                    'messages' => $validator->errors(),
+                ], 422);
+            }
+
+            $data = $request->input('data');
+        } else {
+            // Single item case
+            $rules = [
+                'product_id' => 'required|integer|exists:products,id',
+                'quantity' => 'required|integer|min:1',
+            ];
+
+            // Custom validation error messages for single item
+            $messages = [
+                'product_id.required' => 'ID produk harus diisi.',
+                'product_id.integer' => 'ID produk harus berupa angka bulat.',
+                'product_id.exists' => 'ID produk tidak ada dalam tabel produk.',
+                'quantity.required' => 'Kuantitas harus diisi.',
+                'quantity.integer' => 'Kuantitas harus berupa angka bulat.',
+                'quantity.min' => 'Kuantitas harus lebih besar dari 0.',
+            ];
+
+            // Validate the request for a single item
+            $validator = \Validator::make($request->all(), $rules, $messages);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'error' => 'Validasi gagal.',
+                    'messages' => $validator->errors(),
+                ], 422);
+            }
+
+            // Wrap single item in an array for consistent processing
+            $data = [$request->only(['product_id', 'quantity'])];
         }
 
         DB::beginTransaction();
 
         try {
-            $cart = Carts::create([
-                'user_id' => Auth::id(),
-                'product_id' => $request->product_id,
-                'quantity' => $request->quantity,
-            ]);
+            $carts = [];
+
+            foreach ($data as $item) {
+                // Check if the item already exists in the cart for the current user
+                $existingCart = Carts::where('user_id', Auth::id())
+                    ->where('product_id', $item['product_id'])
+                    ->first();
+
+                if ($existingCart) {
+                    // Update the quantity if the item is already in the cart
+                    $existingCart->quantity = $item['quantity'];
+                    $existingCart->save();
+                    $carts[] = $existingCart;
+                } else {
+                    // Create a new cart entry if the item is not in the cart
+                    $cart = Carts::create([
+                        'user_id' => Auth::id(),
+                        'product_id' => $item['product_id'],
+                        'quantity' => $item['quantity'],
+                    ]);
+                    $carts[] = $cart;
+                }
+            }
 
             DB::commit();
 
-            return response()->json($cart, 200);
+            return response()->json($carts, 200);
 
         } catch (\Exception $e) {
             DB::rollBack();
 
             return response()->json([
-                'error' => 'Error create cart.',
+                'error' => 'Gagal membuat keranjang.',
                 'message' => $e->getMessage(),
             ], 500);
         }

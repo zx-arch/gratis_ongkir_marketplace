@@ -9,7 +9,7 @@
 
 ## Sample Request Data
 
-### Single Item
+### Single Item (Without `data` key)
 
 ```json
 {
@@ -17,17 +17,22 @@
     "quantity": 2
 }
 ```
-### Multiple Item
+### Multiple or Single Item (With `data` key)
 
 ```json
-[
-    {
-        "product_id": 1,
-        "quantity": 2
-    },
-    {
-        "product_id": 2,
-        "quantity": 5
-    }
-]
-```
+{
+    "data": [
+        {
+            "product_id": 1,
+            "quantity": 3
+        },
+        {
+            "product_id": 2,
+            "quantity": 5
+        },
+        {
+            "product_id": 3,
+            "quantity": 2
+        }
+    ]
+}```
