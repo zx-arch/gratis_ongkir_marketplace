@@ -5,140 +5,222 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Carts;
+use App\Models\Products;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use App\Http\Requests\API\Carts\PostCartRequest;
+use App\Http\Requests\API\Carts\UpdateCartRequest;
 
 class CartAPIController extends Controller
 {
-    public function index()
+    private $findUser;
+
+    public function __construct()
     {
-        $carts = Carts::where('user_id', Auth::id())->with('product')->get();
-        return response()->json($carts);
+        // cek dan ambil data user autentikasi
+        $this->findUser = auth()->check() ? User::find(Auth::id()) : null;
     }
 
-    public function store(Request $request)
+    public function index()
     {
-        $rules = [
-            'product_id' => 'required|integer|exists:products,id',
-            'quantity' => 'required|integer',
-        ];
-
-        // Pesan kesalahan validasi kustom
-        $messages = [
-            'product_id.required' => 'ID produk harus diisi.',
-            'product_id.integer' => 'Setiap ID produk harus berupa angka bulat.',
-            'product_id.*.exists' => 'ID produk tidak ada dalam tabel produk.',
-            'quantity.required' => 'Kuantitas harus diisi.',
-            'quantity.integer' => 'Setiap kuantitas harus berupa angka bulat.'
-        ];
-
-        // Validasi data permintaan
-        $validator = \Validator::make($request->all(), $rules, $messages);
-
-        if ($validator->fails()) {
+        // Periksa apakah pengguna ditemukan atau tidak di dalam constructor
+        if (is_null($this->findUser)) {
             return response()->json([
-                'error' => 'Validasi gagal.',
-                'messages' => $validator->errors(),
-            ], 422);
+                'status' => 'error',
+                'message' => 'Pengguna belum melakukan autentikasi token!'
+            ], 401);
         }
 
-        DB::beginTransaction();
+        try {
+            $carts = Carts::where('user_id', $this->findUser->id)->with('product')->get();
+            $response = ['status' => 'success', 'data' => $carts];
+
+            if ($carts->isEmpty()) {
+                $response['message'] = 'Keranjang belanja kosong.';
+            }
+
+            return response()->json($response, 200);
+
+        } catch (\Throwable $e) {
+            // menangkap semua jenis kesalahan termasuk sprti undefined array dsb
+            return response()->json([
+                'status' => 'error',
+                'message' => "Terjadi kesalahan internal pada server: {$e->getMessage()}"
+            ], $e->getCode() ?: 500);
+        }
+    }
+
+    public function store(PostCartRequest $request)
+    {
+        // Validate and retrieve data from the request
+        $data = $request->validated();
+        $data = $request->has('data') ? $request->safe()->input('data') : [$request->safe()->only(['product_id', 'quantity'])];
 
         try {
-            $cart = Carts::create([
-                'user_id' => Auth::id(),
-                'product_id' => $request->product_id,
-                'quantity' => $request->quantity,
-            ]);
+            DB::transaction(function () use (&$data) {
+                if (count($data) > 1) {
+                    // Fetch all cart items for the current user
+                    $existingCartItems = Carts::where('user_id', Auth::id())
+                        ->whereIn('product_id', collect($data)->pluck('product_id'))
+                        ->get()
+                        ->keyBy('product_id'); // Use keyBy for easier searching
 
-            DB::commit();
+                    // Fetch all product stocks for the given product IDs
+                    $productStocks = Products::whereIn('id', collect($data)->pluck('product_id'))
+                        ->get()
+                        ->keyBy('id');
 
-            return response()->json($cart, 200);
+                    foreach ($data as $item) {
+                        $productId = $item['product_id'];
+                        $quantity = $item['quantity'];
 
-        } catch (\Exception $e) {
-            DB::rollBack();
+                        // Check if the product stock is available
+                        if (!isset($productStocks[$productId]) || $productStocks[$productId]->stock < $quantity) {
+                            throw new \Exception("Kuantitas tidak boleh lebih dari {$productStocks[$productId]->stock} untuk produk ID {$productId}!");
+                        }
+
+                        if (isset($existingCartItems[$productId])) {
+                            // If the item already exists in the cart, update the quantity
+                            $cart = $existingCartItems[$productId];
+                            $cart->quantity = $quantity;
+                            $cart->save();
+                        } else {
+                            // If the item does not exist in the cart, create a new entry
+                            Carts::create([
+                                'user_id' => Auth::id(),
+                                'product_id' => $productId,
+                                'quantity' => $quantity,
+                            ]);
+                        }
+                    }
+
+                } else {
+                    $productId = $data[0]['product_id'];
+                    $quantity = $data[0]['quantity'];
+
+                    // Fetch the existing cart item for the current user
+                    $existingCart = Carts::where('user_id', Auth::id())
+                        ->where('product_id', $productId)
+                        ->first();
+
+                    // Fetch the stock of the requested product
+                    $productStock = Products::where('id', $productId)->value('stock');
+
+                    if ($productStock < $quantity) {
+                        throw new \Exception("Kuantitas tidak boleh lebih dari {$productStock} stock!");
+                    }
+
+                    if ($existingCart) {
+                        $existingCart->quantity = $quantity;
+                        $existingCart->save();
+                    } else {
+                        Carts::create([
+                            'user_id' => Auth::id(),
+                            'product_id' => $productId,
+                            'quantity' => $quantity,
+                        ]);
+                    }
+                }
+
+            }, 5);
 
             return response()->json([
-                'error' => 'Error create cart.',
-                'message' => $e->getMessage(),
+                'status' => 'success',
+                'message' => 'Berhasil menambah produk ke keranjang!'
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], 422);
+
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Gagal menambah produk ke keranjang: {$e->getMessage()}",
             ], 500);
         }
     }
 
     public function show($id)
     {
-        $cart = Carts::where('user_id', Auth::id())->where('id', $id)->with('product')->first();
-        return response()->json([$cart]);
-    }
-
-    public function update(Request $request, $id)
-    {
-        $rules = [
-            'quantity' => 'required|integer',
-        ];
-
-        // Pesan kesalahan validasi kustom
-        $messages = [
-            'quantity.required' => 'Quantity harus diisi.',
-            'quantity.integer' => 'Setiap quantity harus berupa angka bulat.',
-            'quantity.*.min' => 'Quantity harus minimal 1.',
-            'quantity.*.max' => 'Quantity tidak boleh lebih dari 100.',
-        ];
-
-        // Validasi data permintaan
-        $validator = \Validator::make($request->all(), $rules, $messages);
-
-        if ($validator->fails()) {
+        if (is_null($this->findUser)) {
             return response()->json([
-                'error' => 'Validasi gagal.',
-                'messages' => $validator->errors(),
-            ], 422);
+                'status' => 'error',
+                'message' => 'Pengguna belum melakukan autentikasi token!'
+            ], 401);
         }
 
-        DB::beginTransaction();
+        try {
+            $cart = Carts::where('user_id', Auth::id())->where('id', $id)->with('product')->first();
+            $response = ['status' => 'success', 'data' => $cart];
+
+            if ($cart->isEmpty()) {
+                $response['message'] = 'Keranjang belanja kosong.';
+            }
+
+            return response()->json($response, 200);
+
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Terjadi kesalahan internal pada server: {$e->getMessage()}"
+            ], $e->getCode() ?: 500);
+        }
+
+    }
+
+    public function update(UpdateCartRequest $request, $id)
+    {
+        $validate = $request->validated();
+        $validate = $request->safe()->only('quantity');
 
         try {
             $cart = Carts::where('user_id', Auth::id())->lockForUpdate()->findOrFail($id);
-            $cart->update($request->all());
+            $productStock = Products::where('id', $cart->product_id)->value('stock');
 
-            DB::commit();
-            return response()->json($cart);
+            if ($productStock < $validate['quantity']) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Kuantitas tidak boleh lebih dari {$productStock} stock!"
+                ], 401);
+            }
 
-        } catch (\Exception $e) {
-            DB::rollBack();
+            // Update cart with the correct quantity value
+            $cart->update(['quantity' => $validate['quantity']]);
 
             return response()->json([
-                'error' => 'Error update cart.',
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-            ], $e->getCode() ?? 500);
-        }
+                'status' => 'success',
+                'message' => 'Data cart berhasil diupdate!'
+            ], 200);
 
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Error update cart: {$e->getMessage()}"
+            ], $e->getCode() ?: 500);
+        }
     }
 
     public function destroy($id)
     {
-        DB::beginTransaction();
-
         try {
-            Carts::where('user_id', Auth::id())->where('id', $id)->lockForUpdate()->delete();
-
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Data berhasil dihapus!',
-                'code' => 200
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
+            $cart = Carts::where('user_id', Auth::id())->where('id', $id)->lockForUpdate()->firstOrFail();
+            $cart->delete();
 
             return response()->json([
-                'error' => 'Error delete cart.',
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-            ], $e->getCode() ?? 500);
+                'status' => 'success',
+                'message' => 'Data berhasil dihapus!'
+            ], 200);
 
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Error delete cart: {$e->getMessage()}",
+            ], $e->getCode() ?: 500);
         }
     }
+
 }

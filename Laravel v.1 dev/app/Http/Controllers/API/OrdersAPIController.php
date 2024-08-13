@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Orders;
 use App\Models\OrderItems;
+use App\Models\Carts;
 use App\Models\Products;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -26,125 +27,149 @@ class OrdersAPIController extends Controller
 
     public function checkout(Request $request)
     {
-        // Aturan validasi
-        $rules = [
-            'product_id' => 'required|integer',
-            'quantity' => 'required|integer',
-        ];
+        if ($request->has('data')) {
+            // Multiple items case
+            $rules = [
+                'data' => 'required|array',
+                'data.*.product_id' => 'required|integer|exists:products,id',
+                'data.*.quantity' => 'required|integer|min:1',
+            ];
 
-        if ($request->isJson() && is_array($request->json()->all())) {
-            $data = $request->json()->all();
+            // Custom validation error messages for multiple items
+            $messages = [
+                'data.required' => 'Data produk harus diisi.',
+                'data.array' => 'Data produk harus berupa array.',
+                'data.*.product_id.required' => 'ID produk harus diisi.',
+                'data.*.product_id.integer' => 'ID produk harus berupa angka bulat.',
+                'data.*.product_id.exists' => 'ID produk tidak ada dalam tabel produk.',
+                'data.*.quantity.required' => 'Kuantitas harus diisi.',
+                'data.*.quantity.integer' => 'Kuantitas harus berupa angka bulat.',
+                'data.*.quantity.min' => 'Kuantitas harus lebih besar dari 0.',
+            ];
 
-            if (isset($data[0]) && is_array($data[0])) {
-                $rules = [
-                    '*.product_id' => 'required|integer',
-                    '*.quantity' => 'required|integer',
-                ];
+            // Validate the request for multiple items
+            $validator = \Validator::make($request->all(), $rules, $messages);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'error' => 'Validasi gagal.',
+                    'messages' => $validator->errors(),
+                ], 422);
             }
 
-            try {
-                // Validasi data
-                $request->validate($rules);
+            $data = $request->input('data');
+        } else {
+            // Single item case
+            $rules = [
+                'product_id' => 'required|integer|exists:products,id',
+                'quantity' => 'required|integer|min:1',
+            ];
 
-                DB::beginTransaction();
+            // Custom validation error messages for single item
+            $messages = [
+                'product_id.required' => 'ID produk harus diisi.',
+                'product_id.integer' => 'ID produk harus berupa angka bulat.',
+                'product_id.exists' => 'ID produk tidak ada dalam tabel produk.',
+                'quantity.required' => 'Kuantitas harus diisi.',
+                'quantity.integer' => 'Kuantitas harus berupa angka bulat.',
+                'quantity.min' => 'Kuantitas harus lebih besar dari 0.',
+            ];
 
-                $totalOrderAmount = 0;
-                $orderItemsData = [];
+            // Validate the request for a single item
+            $validator = \Validator::make($request->all(), $rules, $messages);
 
-                $productIds = array_column($data, 'product_id');
-                $products = Products::whereIn('id', $productIds)->get()->keyBy('id');
+            if ($validator->fails()) {
+                return response()->json([
+                    'error' => 'Validasi gagal.',
+                    'messages' => $validator->errors(),
+                ], 422);
+            }
 
-                $newOrder = Orders::create([
-                    'user_id' => Auth::id(),
-                    'order_date' => now(),
-                    'total_amount' => $totalOrderAmount
-                ]);
+            // Wrap single item in an array for consistent processing
+            $data = [$request->only(['product_id', 'quantity'])];
+        }
 
-                if (isset($data[0]) && is_array($data[0])) {
-                    foreach ($data as $item) {
-                        $priceProduct = $products->get($item['product_id']);
+        DB::beginTransaction();
 
-                        if (!$priceProduct) {
-                            throw new \Exception('Produk tidak tersedia!', 400);
-                        }
+        try {
+            $totalOrderAmount = 0;
+            $orderItemsData = [];
+            $productIds = array_column($data, 'product_id');
 
-                        if ($item['quantity'] < 1) {
-                            throw new \Exception('Quantity tidak valid!', 400);
-                        }
+            // Retrieve product data from the database
+            $products = Products::whereIn('id', $productIds)->get()->keyBy('id');
 
-                        if ($priceProduct->stock < $item['quantity']) {
-                            throw new \Exception('Stock tidak cukup!', 400);
-                        }
+            // Retrieve cart items for the current user and the given product IDs
+            $userId = Auth::id();
+            $carts = Carts::where('user_id', $userId)
+                ->whereIn('product_id', $productIds)
+                ->get()
+                ->keyBy('product_id');
 
-                        $itemTotalPrice = $priceProduct->price * $item['quantity'];
-                        $totalOrderAmount += $itemTotalPrice;
+            // Check if any product is not in the cart
+            foreach ($data as $item) {
+                if (!isset($carts[$item['product_id']])) {
+                    throw new \Exception('Produk dengan ID ' . $item['product_id'] . ' tidak tersedia di keranjang.', 400);
+                }
+            }
 
-                        $orderItem = OrderItems::create([
-                            'order_id' => $newOrder->id,
-                            'product_id' => $item['product_id'],
-                            'quantity' => $item['quantity'],
-                            'price' => number_format($itemTotalPrice, 2, '.', '')
-                        ]);
+            // Create a new order
+            $newOrder = Orders::create([
+                'user_id' => $userId,
+                'order_date' => now(),
+                'total_amount' => $totalOrderAmount
+            ]);
 
-                        $orderItemsData[] = $orderItem;
-                    }
+            foreach ($data as $item) {
+                $cartItem = $carts[$item['product_id']];
+                $priceProduct = $products[$item['product_id']];
 
-                    $newOrder->total_amount = $totalOrderAmount;
-                    $newOrder->save();
-
-                } else {
-                    $priceProduct = Products::where('id', $data['product_id'])->first();
-
-                    if (!$priceProduct) {
-                        throw new \Exception('Produk tidak tersedia!', 400);
-                    }
-
-                    if ($data['quantity'] < 1) {
-                        throw new \Exception('Quantity tidak valid!', 400);
-                    }
-
-                    if ($data['quantity'] > $priceProduct->stock) {
-                        throw new \Exception('Stock tidak cukup!', 400);
-                    }
-
-                    $totalPrice = $priceProduct->price * $data['quantity'];
-                    $totalOrderAmount += $totalPrice;
-
-                    $orderItem = OrderItems::create([
-                        'order_id' => $newOrder->id,
-                        'product_id' => $data['product_id'],
-                        'quantity' => $data['quantity'],
-                        'price' => number_format($totalPrice, 2, '.', '')
-                    ]);
-
-                    $orderItemsData[] = $orderItem;
-
-                    $newOrder->total_amount = $totalOrderAmount;
-                    $newOrder->save();
+                // Check if the quantity in the cart matches the quantity in the request
+                if ($cartItem->quantity != $item['quantity']) {
+                    throw new \Exception('Sesuaikan quantity checkout dengan keranjang untuk produk dengan ID ' . $item['product_id'], 400);
                 }
 
-                DB::commit();
+                if ($priceProduct->stock < $item['quantity']) {
+                    throw new \Exception('Stock tidak cukup untuk produk dengan ID ' . $item['product_id'], 400);
+                }
 
-                return response()->json([
-                    'success' => 'Order berhasil dibuat!',
-                    'data' => [
-                        'order' => $newOrder,
-                        'items' => $orderItemsData
-                    ]
-                ], 200);
+                $itemTotalPrice = $priceProduct->price * $item['quantity'];
+                $totalOrderAmount += $itemTotalPrice;
 
-            } catch (\Exception $e) {
-                DB::rollBack();
+                $orderItem = OrderItems::create([
+                    'order_id' => $newOrder->id,
+                    'product_id' => $item['product_id'],
+                    'quantity' => $item['quantity'],
+                    'price' => number_format($itemTotalPrice, 2, '.', '')
+                ]);
 
-                return response()->json([
-                    'error' => 'Error create order.',
-                    'message' => $e->getMessage(),
-                ], $e->getCode() ?: 500);
+                $orderItemsData[] = $orderItem;
             }
-        } else {
+
+            // Update total amount of the order
+            $newOrder->total_amount = $totalOrderAmount;
+            $newOrder->save();
+
+            // Delete cart items
+            Carts::where('user_id', $userId)->whereIn('product_id', $productIds)->delete();
+
+            DB::commit();
+
             return response()->json([
-                'error' => 'Format data tidak valid. Harap kirim data dalam format JSON.',
-            ], 400);
+                'success' => 'Order berhasil dibuat!',
+                'data' => [
+                    'order' => $newOrder,
+                    'items' => $orderItemsData
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'error' => 'Gagal membuat order.',
+                'message' => $e->getMessage(),
+            ], $e->getCode() ?: 500);
         }
     }
 }
