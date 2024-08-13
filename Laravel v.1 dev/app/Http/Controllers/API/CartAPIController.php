@@ -3,14 +3,12 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
 use App\Models\Carts;
 use App\Models\Products;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
-use App\Http\Requests\API\Carts\PostCartRequest;
-use App\Http\Requests\API\Carts\UpdateCartRequest;
+use App\Http\Requests\API\Carts as CartsRequests;
 
 class CartAPIController extends Controller
 {
@@ -51,7 +49,7 @@ class CartAPIController extends Controller
         }
     }
 
-    public function store(PostCartRequest $request)
+    public function store(CartsRequests\PostCartRequest $request)
     {
         // Validate and retrieve data from the request
         $data = $request->validated();
@@ -172,7 +170,7 @@ class CartAPIController extends Controller
 
     }
 
-    public function update(UpdateCartRequest $request, $id)
+    public function update(CartsRequests\UpdateCartRequest $request, $id)
     {
         $validate = $request->validated();
         $validate = $request->safe()->only('quantity');
