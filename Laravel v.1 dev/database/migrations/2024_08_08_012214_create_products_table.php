@@ -14,7 +14,7 @@ return new class extends Migration {
             $table->bigIncrements('id');
             $table->string('name');
             $table->decimal('price', 12, 0);
-            $table->integer('stock');
+            $table->integer('stock')->unsigned();
             $table->timestamps();
         });
     }
