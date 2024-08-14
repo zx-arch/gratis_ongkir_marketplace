@@ -39,28 +39,27 @@ class CartAPIController extends Controller
         $data = $request->has('data') ? $request->safe()->input('data') : [$request->safe()->only(['product_id', 'quantity'])];
 
         try {
-            // Extract product IDs and quantities from data
-            $productIds = collect($data)->pluck('product_id');
-
-            // Fetch all product stocks for the given product IDs
-            $productStocks = Products::whereIn('id', $productIds)
-                ->lockForUpdate()
-                ->get()
-                ->keyBy('id');
-
-            // Fetch all existing cart items for the current user and given product IDs
-            $existingCartItems = Carts::where('user_id', Auth::id())
-                ->whereIn('product_id', $productStocks->keys()->toArray())
-                ->get()
-                ->keyBy('product_id');
-
-            // Prepare arrays for bulk update and insert
-            $bulkUpdates = [];
-            $bulkInserts = [];
-
             if (count($data) > 1) {
+                // Extract product IDs from data
+                $productIds = array_column($data, 'product_id');
 
-                collect($data)->map(function ($item) use ($productStocks, $existingCartItems, &$bulkUpdates, &$bulkInserts) {
+                // Fetch all product stocks for the given product IDs
+                $productStocks = Products::whereIn('id', $productIds)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('id');
+
+                // Fetch all existing cart items for the current user and given product IDs
+                $existingCartItems = Carts::where('user_id', Auth::id())
+                    ->whereIn('product_id', $productStocks->keys()->toArray())
+                    ->get()
+                    ->keyBy('product_id');
+
+                // Prepare arrays for bulk update and insert
+                $bulkUpdates = [];
+                $bulkInserts = [];
+
+                foreach ($data as $item) {
                     $productId = $item['product_id'];
                     $quantity = $item['quantity'];
 
@@ -89,23 +88,16 @@ class CartAPIController extends Controller
                             'updated_at' => now()
                         ];
                     }
-                });
-
-                // Construct a CASE WHEN statement for bulk updating
-                $caseStatements = [];
-                $caseStatementStr = '';
-
-                if (!empty($bulkUpdates)) {
-                    foreach ($bulkUpdates as $id => $quantity) {
-                        $caseStatements[] = "WHEN id = {$id} THEN {$quantity}";
-                    }
-
-                    // Convert the CASE statements array to a string
-                    $caseStatementStr = implode(' ', $caseStatements);
                 }
 
                 // Execute the bulk update with a CASE statement if any updates exist
                 if (!empty($bulkUpdates)) {
+                    $cases = array_map(function ($id, $quantity) {
+                        return "WHEN id = {$id} THEN {$quantity}";
+                    }, array_keys($bulkUpdates), $bulkUpdates);
+
+                    $caseStatementStr = implode(' ', $cases);
+
                     Carts::whereIn('id', array_keys($bulkUpdates))
                         ->update(['quantity' => DB::raw("(CASE {$caseStatementStr} END)")]);
                 }
@@ -122,7 +114,7 @@ class CartAPIController extends Controller
 
                 // Fetch the existing cart item for the current user
                 $existingCart = Carts::where('user_id', Auth::id())
-                    ->where('product_id', $product->stock)
+                    ->where('product_id', $productId)
                     ->first();
 
                 // Fetch the stock of the requested product
