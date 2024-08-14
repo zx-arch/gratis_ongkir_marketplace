@@ -9,9 +9,9 @@ use App\Models\Carts;
 use App\Models\Products;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use App\Http\Requests\API\Orders as OrdersRequests;
+use App\Http\Requests\API\Orders as OrdersApiRequests;
 
-class OrdersAPIController extends Controller
+class OrderAPIController extends Controller
 {
     public function index()
     {
@@ -56,7 +56,7 @@ class OrdersAPIController extends Controller
 
     }
 
-    public function checkout(OrdersRequests\CheckoutRequest $request)
+    public function checkout(OrdersApiRequests\CheckoutRequest $request)
     {
         $data = $request->validated();
         $data = $request->has('data') ? $request->safe()->input('data') : [$request->safe()->only(['product_id', 'quantity'])];
