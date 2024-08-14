@@ -60,7 +60,7 @@ class CartAPIController extends Controller
 
             if (count($data) > 1) {
 
-                foreach ($data as $item) {
+                collect($data)->map(function ($item) use ($productStocks, $existingCartItems, &$bulkUpdates, &$bulkInserts) {
                     $productId = $item['product_id'];
                     $quantity = $item['quantity'];
 
@@ -89,7 +89,7 @@ class CartAPIController extends Controller
                             'updated_at' => now()
                         ];
                     }
-                }
+                });
 
                 // Construct a CASE WHEN statement for bulk updating
                 $caseStatements = [];
