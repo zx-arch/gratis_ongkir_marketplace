@@ -3,7 +3,7 @@
 use App\Http\Controllers\API\OrderAPIController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\AuthController;
+use App\Http\Controllers\AuthApiController;
 use App\Http\Controllers\API\CartAPIController;
 
 /*
@@ -21,8 +21,8 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
 
-Route::post('register', [AuthController::class, 'register']);
-Route::post('login', [AuthController::class, 'login']);
+Route::post('register', [AuthApiController::class, 'register']);
+Route::post('login', [AuthApiController::class, 'login']);
 
 Route::middleware('auth:api')->group(function () {
     Route::get('carts', [CartAPIController::class, 'index']);
@@ -35,7 +35,7 @@ Route::middleware('auth:api')->group(function () {
     Route::post('checkout', [OrderAPIController::class, 'checkout']);
     Route::get('orders/{id}', [OrderAPIController::class, 'show']);
 
-    Route::post('logout', [AuthController::class, 'logout'])->name('auth.logout');
-    Route::post('refresh', [AuthController::class, 'refresh'])->name('auth.refresh');
-    Route::post('me', [AuthController::class, 'me'])->name('auth.me');
+    Route::post('logout', [AuthApiController::class, 'logout'])->name('auth.logout');
+    Route::post('refresh', [AuthApiController::class, 'refresh'])->name('auth.refresh');
+    Route::post('me', [AuthApiController::class, 'me'])->name('auth.me');
 });
