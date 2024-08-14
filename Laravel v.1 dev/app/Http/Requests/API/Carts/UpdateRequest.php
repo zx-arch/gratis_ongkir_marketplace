@@ -6,7 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Illuminate\Contracts\Validation\Validator;
 
-class UpdateCartRequest extends FormRequest
+class UpdateRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.

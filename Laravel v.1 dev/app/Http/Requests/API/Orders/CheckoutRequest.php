@@ -1,12 +1,12 @@
 <?php
 
-namespace App\Http\Requests\API\Carts;
+namespace App\Http\Requests\API\Orders;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Illuminate\Contracts\Validation\Validator;
 
-class PostCartRequest extends FormRequest
+class CheckoutRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
