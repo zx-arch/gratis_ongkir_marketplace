@@ -5,33 +5,16 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Carts;
 use App\Models\Products;
-use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Requests\API\Carts as CartsRequests;
 
 class CartAPIController extends Controller
 {
-    private $findUser;
-
-    public function __construct()
-    {
-        // cek dan ambil data user autentikasi
-        $this->findUser = auth()->check() ? User::find(Auth::id()) : null;
-    }
-
     public function index()
     {
-        // Periksa apakah pengguna ditemukan atau tidak di dalam constructor
-        if (is_null($this->findUser)) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Pengguna belum melakukan autentikasi token!'
-            ], 401);
-        }
-
         try {
-            $carts = Carts::where('user_id', $this->findUser->id)->with('product')->get();
+            $carts = Carts::where('user_id', Auth::id())->with('product')->get();
             $response = ['status' => 'success', 'data' => $carts];
 
             if ($carts->isEmpty()) {
@@ -75,58 +58,88 @@ class CartAPIController extends Controller
             $bulkUpdates = [];
             $bulkInserts = [];
 
-            // Constructing queries
-            foreach ($data as $item) {
-                $productId = $item['product_id'];
-                $quantity = $item['quantity'];
+            if (count($data) > 1) {
 
-                // Check if product stock data exists for the given product ID
-                if (!isset($productStocks[$productId])) {
-                    throw new \Exception("Produk dengan ID {$productId} tidak ditemukan!");
+                foreach ($data as $item) {
+                    $productId = $item['product_id'];
+                    $quantity = $item['quantity'];
+
+                    // Check if product stock data exists for the given product ID
+                    if (!isset($productStocks[$productId])) {
+                        throw new \Exception("Produk dengan ID {$productId} tidak ditemukan!");
+                    }
+
+                    $productStock = $productStocks[$productId]->stock;
+
+                    // Check stock availability
+                    if ($productStock < $quantity) {
+                        throw new \Exception("Kuantitas tidak boleh lebih dari {$productStock} untuk produk ID {$productId}!");
+                    }
+
+                    if (isset($existingCartItems[$productId])) {
+                        // If the item already exists in the cart, prepare it for update
+                        $bulkUpdates[$existingCartItems[$productId]->id] = $quantity;
+                    } else {
+                        // If the item does not exist in the cart, prepare it for insertion
+                        $bulkInserts[] = [
+                            'user_id' => Auth::id(),
+                            'product_id' => $productId,
+                            'quantity' => $quantity,
+                            'created_at' => now(),
+                            'updated_at' => now()
+                        ];
+                    }
                 }
 
-                $productStock = $productStocks[$productId]->stock;
+                // Construct a CASE WHEN statement for bulk updating
+                $caseStatements = [];
+                $caseStatementStr = '';
 
-                // Check stock availability
-                if ($productStock < $quantity) {
-                    throw new \Exception("Kuantitas tidak boleh lebih dari {$productStock} untuk produk ID {$productId}!");
+                if (!empty($bulkUpdates)) {
+                    foreach ($bulkUpdates as $id => $quantity) {
+                        $caseStatements[] = "WHEN id = {$id} THEN {$quantity}";
+                    }
+
+                    // Convert the CASE statements array to a string
+                    $caseStatementStr = implode(' ', $caseStatements);
                 }
 
-                if (isset($existingCartItems[$productId])) {
-                    // If the item already exists in the cart, prepare it for update
-                    $bulkUpdates[$existingCartItems[$productId]->id] = $quantity;
+                // Execute the bulk update with a CASE statement if any updates exist
+                if (!empty($bulkUpdates)) {
+                    Carts::whereIn('id', array_keys($bulkUpdates))
+                        ->update(['quantity' => DB::raw("(CASE {$caseStatementStr} END)")]);
+                }
+
+                // Perform bulk inserts if there are new cart items
+                if (!empty($bulkInserts)) {
+                    Carts::insert($bulkInserts);
+                }
+
+            } else {
+                $productId = $data[0]['product_id'];
+                $quantity = $data[0]['quantity'];
+                $product = Products::where('id', $productId)->lockForUpdate()->first();
+
+                // Fetch the existing cart item for the current user
+                $existingCart = Carts::where('user_id', Auth::id())
+                    ->where('product_id', $product->stock)
+                    ->first();
+
+                // Fetch the stock of the requested product
+                if ($product->stock < $quantity) {
+                    throw new \Exception("Kuantitas tidak boleh lebih dari {$product->stock} stock!");
+                }
+
+                if ($existingCart) {
+                    $existingCart->quantity = $quantity;
+                    $existingCart->save();
                 } else {
-                    // If the item does not exist in the cart, prepare it for insertion
-                    $bulkInserts[] = [
+                    Carts::create([
                         'user_id' => Auth::id(),
                         'product_id' => $productId,
                         'quantity' => $quantity,
-                    ];
+                    ]);
                 }
-            }
-
-            // Construct a CASE WHEN statement for bulk updating
-            $caseStatements = [];
-            $caseStatementStr = '';
-
-            if (!empty($bulkUpdates)) {
-                foreach ($bulkUpdates as $id => $quantity) {
-                    $caseStatements[] = "WHEN id = {$id} THEN {$quantity}";
-                }
-
-                // Convert the CASE statements array to a string
-                $caseStatementStr = implode(' ', $caseStatements);
-            }
-
-            // Execute the bulk update with a CASE statement if any updates exist
-            if (!empty($bulkUpdates)) {
-                Carts::whereIn('id', array_keys($bulkUpdates))
-                    ->update(['quantity' => DB::raw("(CASE {$caseStatementStr} END)")]);
-            }
-
-            // Perform bulk inserts if there are new cart items
-            if (!empty($bulkInserts)) {
-                Carts::insert($bulkInserts);
             }
 
             return response()->json([
@@ -150,13 +163,6 @@ class CartAPIController extends Controller
 
     public function show($id)
     {
-        if (is_null($this->findUser)) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Pengguna belum melakukan autentikasi token!'
-            ], 401);
-        }
-
         try {
             $cart = Carts::where('user_id', Auth::id())->where('id', $id)->with('product')->first();
             $response = ['status' => 'success', 'data' => $cart];
