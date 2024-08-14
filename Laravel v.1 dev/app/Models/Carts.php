@@ -13,7 +13,8 @@ class Carts extends Model
         'quantity'
     ];
 
-    public function product() {
+    public function product()
+    {
         return $this->belongsTo(Products::class);
     }
 }
