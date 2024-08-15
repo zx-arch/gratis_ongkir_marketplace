@@ -26,9 +26,9 @@ class CheckoutRequest extends FormRequest
     {
         return [
             'data' => 'sometimes|required|array',
-            'data.*.product_id' => 'required|integer|min:1|exists:products,id',
+            'data.*.product_id' => 'required|integer|min:1',
             'data.*.quantity' => 'sometimes|required|integer|min:1',
-            'product_id' => 'required_if:data,null|integer|exists:products,id',
+            'product_id' => 'required_if:data,null|integer',
             'quantity' => 'required_if:data,null|integer|min:1',
         ];
     }

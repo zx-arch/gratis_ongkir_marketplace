@@ -12,10 +12,8 @@ class AuthApiController extends Controller
 {
     public function register(RegisterApiRequests $request)
     {
-        $validatedData = $request->validated();
-
         try {
-            $password = $validatedData['password'];
+            $password = $request->password;
 
             //kondisi jika password belum di-hash
             if (Hash::needsRehash($password)) {
@@ -24,8 +22,8 @@ class AuthApiController extends Controller
 
             // Buat pengguna baru
             $user = User::create([
-                'name' => $validatedData['name'],
-                'email' => $validatedData['email'],
+                'name' => $request->name,
+                'email' => $request->email,
                 'password' => $password,
             ]);
 
@@ -34,7 +32,6 @@ class AuthApiController extends Controller
             return response()->json($response, 200);
 
         } catch (\Throwable $e) {
-
             return response()->json([
                 'status' => 'error',
                 'message' => "Failed to register user: {$e->getMessage()}",
