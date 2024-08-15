@@ -7,6 +7,7 @@ use App\Models\Orders;
 use App\Models\OrderItems;
 use App\Models\Carts;
 use App\Models\Products;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use App\Http\Requests\API\Orders as OrdersApiRequests;
@@ -15,60 +16,107 @@ class OrderAPIController extends Controller
 {
     public function index()
     {
-        try {
-            $orders = Orders::where('user_id', Auth::id())->with('orderItems')->get();
-            $response = ['status' => 'success', 'data' => $orders];
+        $orders = Orders::where('user_id', Auth::id())
+            ->with('orderItems')->latest()
+            ->get();
 
-            if ($orders->isEmpty()) {
-                $response['message'] = 'Order pesanan kosong.';
-            }
-
-            return response()->json($response, 200);
-
-        } catch (\Throwable $e) {
-            // menangkap semua jenis kesalahan termasuk sprti undefined array dsb
-            return response()->json([
-                'status' => 'error',
-                'message' => "Terjadi kesalahan internal pada server: {$e->getMessage()}"
-            ], $e->getCode() ?: 500);
-        }
+        return $this->formatApiResponse('success', data: $orders);
     }
 
     public function show($id)
     {
-        try {
-            $orders = Orders::where('user_id', Auth::id())->where('id', $id)->with('order_items')->first();
-            $response = ['status' => 'success', 'data' => $orders];
+        $order = Orders::where('user_id', Auth::id())
+            ->where('id', $id)
+            ->with('orderItems')
+            ->first();
 
-            if ($orders->isEmpty()) {
-                $response['message'] = 'Order pesanan kosong.';
+        return $this->formatApiResponse('success', data: $order);
+    }
+
+    /**
+     * Format the API response.
+     *
+     * @param string $status
+     * @param string|null $message
+     * @param mixed|null $data
+     * @param int $errorCode
+     * @return \Illuminate\Http\JsonResponse
+     */
+    private function formatApiResponse($status, $message = null, $data = null, $errorCode = 200)
+    {
+        $response = [
+            'status' => $status,
+        ];
+
+        if ($status === 'success') {
+            if ($data !== null) {
+                $response['data'] = $this->mapData($data);
             }
-
-            return response()->json($response, 200);
-
-        } catch (\Throwable $e) {
-            // menangkap semua jenis kesalahan termasuk sprti undefined array dsb
-            return response()->json([
-                'status' => 'error',
-                'message' => "Terjadi kesalahan internal pada server: {$e->getMessage()}"
-            ], $e->getCode() ?: 500);
+            if ($message !== null) {
+                $response['message'] = $message;
+            }
+        } elseif ($status === 'error') {
+            $response['message'] = $message ?? 'An error occurred';
+            $errorCode = $errorCode ?: 500;
         }
 
+        return response()->json($response, $errorCode);
+    }
+
+    /**
+     * Map the data to the desired format.
+     *
+     * @param mixed $data
+     * @return mixed
+     */
+    private function mapData($data)
+    {
+        if ($data instanceof \Illuminate\Database\Eloquent\Collection) {
+            return $data->map(function ($item) {
+                return $this->formatOrder($item);
+            });
+        } elseif ($data instanceof \Illuminate\Database\Eloquent\Model) {
+            return $this->formatOrder($data);
+        }
+
+        return $data;
+    }
+
+    /**
+     * Format a single order.
+     *
+     * @param \App\Models\Orders $order
+     * @return array
+     */
+    private function formatOrder($order)
+    {
+        return [
+            'id' => $order->id,
+            'order_date' => $order->order_date,
+            'total_amount' => $order->total_amount,
+            'order_items' => $order->orderItems->map(function ($item) {
+                return [
+                    'product_id' => $item->product_id,
+                    'quantity' => $item->quantity,
+                    'price' => $item->price,
+                ];
+            }),
+        ];
     }
 
     public function checkout(OrdersApiRequests\CheckoutRequest $request)
     {
-        $data = $request->validated();
-        $data = $request->has('data') ? $request->safe()->input('data') : [$request->safe()->only(['product_id', 'quantity'])];
+        $data = $request->has('data') ? $request->safe()->input('data') : [$request->safe()->all()];
+        $errorMessage = '';
 
         try {
             $totalOrderAmount = 0;
             $productIds = array_column($data, 'product_id');
 
-            // Retrieve product and cart data from the database
-            $products = Products::whereIn('id', $productIds)->lockForUpdate()->get()->keyBy('id');
+            // Retrieve product and cart data from the database efficiently
+            $products = Products::whereIn('id', $productIds)->pluck('price', 'id');
             $userId = Auth::id();
-            $carts = Carts::where('user_id', $userId)->whereIn('product_id', $products->keys()->toArray())->get()->keyBy('product_id');
+            $carts = Carts::where('user_id', $userId)->whereIn('product_id', $productIds)->pluck('quantity', 'product_id');
 
             // Prepare bulk insert data for order items and check stock availability
             $orderItems = [];
@@ -77,72 +125,70 @@ class OrderAPIController extends Controller
                 $productId = $item['product_id'];
                 $quantity = $item['quantity'];
 
+                // Check if the product is in the cart
                 if (!isset($carts[$productId])) {
-                    throw new \Exception("Produk dengan ID $productId tidak tersedia di keranjang.", 400);
+                    $errorMessage = "Produk tidak ditemukan di cart!";
+                    throw new \Exception($errorMessage, 400);
                 }
 
-                $product = $products[$productId];
-                if ($product->stock < $quantity) {
-                    throw new \Exception("Kuantitas melebihi stock produk, saat ini stock tersisa {$product->stock} stock untuk produk ID $productId", 400);
+                // Check stock availability
+                $productStock = Products::where('id', $productId)->value('stock');
+                if ($productStock < $quantity) {
+                    $errorMessage = "Kuantitas tidak boleh melebihi stock produk!";
+                    throw new \Exception($errorMessage, 400);
                 }
 
-                // Update stock
-                $product->stock -= $quantity;
-                $product->save();
+                // Safely decrement the product stock
+                Products::where('id', $productId)->decrement('stock', $quantity);
 
                 // Calculate total amount
-                $totalOrderAmount += $product->price * $quantity;
+                $totalOrderAmount += $products[$productId] * $quantity;
 
                 // Prepare order items for bulk insert
                 $orderItems[] = [
                     'product_id' => $productId,
                     'quantity' => $quantity,
-                    'price' => number_format($product->price * $quantity, 2, '.', ''),
+                    'price' => $products[$productId] * $quantity,
                     'created_at' => now(),
                     'updated_at' => now()
                 ];
             }
 
-            DB::transaction(function () use (&$userId, &$totalOrderAmount, &$orderItems) {
-                // Create a new order
-                $newOrder = Orders::create([
-                    'user_id' => $userId,
-                    'order_date' => now(),
-                    'total_amount' => $totalOrderAmount
-                ]);
+            // Start the transaction
+            DB::beginTransaction();
 
-                // Add order_id to each item using array_map
-                $orderItems = array_map(function ($item) use ($newOrder) {
-                    $item['order_id'] = $newOrder->id;
-                    return $item;
-                }, $orderItems);
+            $newOrder = Orders::create([
+                'user_id' => $userId,
+                'order_date' => now(),
+                'total_amount' => $totalOrderAmount
+            ]);
 
-                // Insert order items in bulk
-                OrderItems::insert($orderItems);
+            // Add order_id to each item
+            $orderItems = array_map(function ($item) use ($newOrder) {
+                $item['order_id'] = $newOrder->id;
+                return $item;
+            }, $orderItems);
 
-                // Delete cart items
-                Carts::where('user_id', $userId)->whereIn('product_id', array_column($orderItems, 'product_id'))->delete();
+            // Insert order items in bulk
+            OrderItems::insert($orderItems);
 
-            }, 5);
+            // Delete cart items
+            Carts::where('user_id', $userId)->whereIn('product_id', array_column($orderItems, 'product_id'))->delete();
 
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Order berhasil dibuat!'
-            ], 200);
+            DB::commit();
 
-        } catch (\Exception $e) {
-
-            return response()->json([
-                'status' => 'error',
-                'message' => $e->getMessage(),
-            ], $e->getCode() ?: 500);
+            return $this->formatApiResponse('success', 'Order berhasil dibuat!');
 
         } catch (\Throwable $e) {
+            DB::rollBack();
 
-            return response()->json([
-                'status' => 'error',
-                'message' => "Gagal membuat order: {$e->getMessage()}",
-            ], $e->getCode() ?: 500);
+            // Log the error message
+            Log::error('Error processing order: ' . $e->getMessage(), [
+                'request_data' => $request->all(),
+                'user_id' => Auth::id(),
+            ]);
+
+            return $this->formatApiResponse('error', $e->getMessage(), null, $e->getCode() ?: 500);
         }
     }
 }

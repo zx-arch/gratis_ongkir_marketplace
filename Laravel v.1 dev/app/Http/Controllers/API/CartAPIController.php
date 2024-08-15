@@ -5,84 +5,98 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Carts;
 use App\Models\Products;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use App\Http\Requests\API\Carts as CartsApiRequests;
 
 class CartAPIController extends Controller
 {
     public function index()
     {
-        $carts = Carts::with('product')->where('user_id', Auth::id())->latest()->get();
-        return $this->formatResponse('success', $carts, 200);
+        $carts = Carts::with('product')
+            ->where('user_id', Auth::id())
+            ->latest()
+            ->get();
+
+        return $this->formatApiResponse('success', data: $carts);
     }
 
     public function show($id)
     {
-        $cart = Carts::select('product_id', 'quantity')->where('id', $id)
-            ->where('user_id', Auth::id())->with('product')->latest()
+        $cart = Carts::with('product')
+            ->where('user_id', Auth::id())
+            ->where('id', $id)
             ->first();
 
-        return $this->formatResponse('success', $cart, 200);
+        return $this->formatApiResponse('success', data: $cart);
     }
 
-    private function formatResponse($status, $message, $data = null, $errorCode = 200)
+    /**
+     * Format the API response.
+     *
+     * @param string $status
+     * @param string|null $message
+     * @param mixed|null $data
+     * @param int $errorCode
+     * @return \Illuminate\Http\JsonResponse
+     */
+    private function formatApiResponse($status, $message = null, $data = null, $errorCode = 200)
     {
-        // Inisialisasi response dasar
-        $response = [
-            'status' => $status,
-            'message' => $message ?: $this->getDefaultMessage($status, $errorCode)
-        ];
+        $response = ['status' => $status];
 
-        // Jika status adalah success dan data ada, tambahkan data ke response
-        if ($status === 'success' && $data !== null) {
-            $response['data'] = $this->formatData($data);
+        if ($status === 'success') {
+            if ($data !== null) {
+                $response['data'] = $this->mapData($data);
+            }
+            if ($message) {
+                $response['message'] = $message;
+            }
+        } elseif ($status === 'error') {
+            $response['message'] = $message ?? $this->getDefaultMessage($errorCode);
         }
 
-        // Untuk status error atau jika errorCode adalah kode error yang dikenal
-        if ($status === 'error' || in_array($errorCode, [400, 401, 403, 404, 429, 500])) {
-            return response()->json($response, $errorCode);
-        }
-
-        // Jika status success dan message bukan string, set response data dan hapus key message
-        if (gettype($response['message'] != 'string')) {
-            // copy response message ke response data
-            $response["data"] = $response["message"];
-            // hapus data response message
-            unset($response["message"]);
-        }
-
-        return response()->json($response, 200);
+        return response()->json($response, $errorCode);
     }
 
-    // Dapatkan pesan default berdasarkan status dan kode error
-    private function getDefaultMessage($status, $errorCode)
+    private function getDefaultMessage($errorCode)
     {
-        if ($status === 'error') {
-            return match ($errorCode) {
-                400 => 'Permintaan tidak valid.',
-                401 => 'Akses tidak diizinkan.',
-                403 => 'Akses ditolak.',
-                404 => 'Sumber daya tidak ditemukan.',
-                429 => 'Terlalu banyak request data.',
-                default => 'Terjadi kesalahan server',
-            };
-        }
-        return;
+        return match ($errorCode) {
+            400 => 'Permintaan tidak valid.',
+            401 => 'Akses tidak diizinkan.',
+            403 => 'Akses ditolak.',
+            404 => 'Sumber daya tidak ditemukan.',
+            429 => 'Terlalu banyak permintaan.',
+            default => 'Terjadi kesalahan server.',
+        };
     }
 
-    // Format data untuk response
-    private function formatData($data)
+    /**
+     * Map the data to the desired format.
+     *
+     * @param mixed $data
+     * @return mixed
+     */
+    private function mapData($data)
     {
-        return $data instanceof \Illuminate\Support\Collection ?
-            $data->map([$this, 'mapOrder']) :
-            ($data instanceof Orders ? $this->mapOrder($data) : null);
+        if ($data instanceof \Illuminate\Database\Eloquent\Collection) {
+            return $data->map(fn($item) => $this->formatCart($item));
+        } elseif ($data instanceof \Illuminate\Database\Eloquent\Model) {
+            return $this->formatCart($data);
+        }
+
+        return $data;
     }
 
-    // Format data order
-    private function mapOrder($cart)
+    /**
+     * Format a single cart item.
+     *
+     * @param \App\Models\Carts $cart
+     * @return array
+     */
+    private function formatCart($cart)
     {
         return [
+            'id' => $cart->id,
             'product_id' => $cart->product_id,
             'quantity' => $cart->quantity,
             'product' => [
@@ -97,19 +111,16 @@ class CartAPIController extends Controller
     {
         try {
             $product = Products::find($request->product_id);
-            $errorMessage = '';
 
             if (!$product) {
-                $errorMessage = "Produk tidak ditemukan!";
-                throw new \Exception($errorMessage, 404);
+                throw new \Exception("Produk tidak ditemukan!", 404);
             }
 
             if ($product->stock < $request->quantity) {
-                $errorMessage = "Kuantitas tidak boleh lebih dari stock produk!";
-                throw new \Exception($errorMessage, 400);
+                throw new \Exception("Kuantitas tidak boleh lebih dari stock produk!", 400);
             }
 
-            // Fetch the existing cart item for the current user
+            // Check if cart item exists
             $existingCart = Carts::where('user_id', Auth::id())
                 ->where('product_id', $request->product_id)
                 ->first();
@@ -127,17 +138,15 @@ class CartAPIController extends Controller
                 ]);
             }
 
-            return $this->formatResponse('success', 'Berhasil menambah produk ke keranjang!', 200);
+            return $this->formatApiResponse('success', message: 'Berhasil menambah produk ke keranjang!');
 
         } catch (\Throwable $e) {
-            $logError = $errorMessage ?: $e->getMessage();
-
-            Log::error("Throwable error adding product to cart: $logError", [
+            Log::error("Throwable error adding product to cart: " . $e->getMessage(), [
                 'request_data' => $request->all(),
                 'user_id' => Auth::id(),
             ]);
 
-            return $this->formatResponse('error', $errorMessage ?: "Gagal menambah produk ke keranjang", $e->getCode());
+            return $this->formatApiResponse('error', 'Gagal menambah produk ke keranjang!', 500);
         }
     }
 
@@ -148,24 +157,21 @@ class CartAPIController extends Controller
             $productStock = Products::where('id', $cart->product_id)->value('stock');
 
             if ($productStock < $request->quantity) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => "Kuantitas tidak boleh lebih dari stock produk!"
-                ], 401);
+                return $this->formatApiResponse('error', "Kuantitas tidak boleh lebih dari stock produk!", 400);
             }
 
             // Update cart with the correct quantity value
             $cart->update(['quantity' => $request->quantity]);
 
-            return $this->formatResponse('success', 'Data cart berhasil diupdate!', 200);
+            return $this->formatApiResponse('success', message: 'Data cart berhasil diupdate!');
 
         } catch (\Throwable $e) {
-            Log::error('Error update product to cart: ' . $e->getMessage(), [
+            Log::error('Error updating product in cart: ' . $e->getMessage(), [
                 'request_data' => $request->all(),
                 'user_id' => Auth::id(),
             ]);
 
-            return $this->formatResponse('error', 'Error update cart', $e->getCode());
+            return $this->formatApiResponse('error', 'Gagal memperbarui cart!', 500);
         }
     }
 
@@ -175,39 +181,16 @@ class CartAPIController extends Controller
             $cart = Carts::where('user_id', Auth::id())->where('id', $id)->firstOrFail();
             $cart->delete();
 
-            return $this->formatResponse('success', 'Data berhasil dihapus!', 200);
+            return $this->formatApiResponse('success', message: 'Data berhasil dihapus!');
 
         } catch (\Throwable $e) {
-            Log::error('Error delete product to cart: ' . $e->getMessage(), [
+            Log::error('Error deleting product from cart: ' . $e->getMessage(), [
                 'product_id' => $id,
                 'user_id' => Auth::id(),
             ]);
 
-            return $this->formatResponse('error', 'Data cart gagal dihapus!', $e->getCode());
+            return $this->formatApiResponse('error', 'Gagal menghapus data!', 500);
         }
     }
 
-    // private function responses($data)
-    // {
-    //     $response = [
-    //         'status' => 'success',
-    //         'data' => $data->map(function ($cart) {
-    //             return [
-    //                 'product_id' => $cart->product_id,
-    //                 'quantity' => $cart->quantity,
-    //                 'product' => [
-    //                     'name' => $cart->product->name,
-    //                     'price' => $cart->product->price,
-    //                     'stock' => $cart->product->stock,
-    //                 ],
-    //             ];
-    //         }),
-    //     ];
-
-    //     if ($data->isEmpty()) {
-    //         $response['message'] = 'Keranjang belanja kosong.';
-    //     }
-
-    //     return $response;
-    // }
 }
