@@ -126,6 +126,7 @@ class CartAPIController extends Controller
                     'updated_at' => now()
                 ]);
             }
+
             return $this->formatResponse('success', 'Berhasil menambah produk ke keranjang!', 200);
 
         } catch (\Throwable $e) {
@@ -170,14 +171,20 @@ class CartAPIController extends Controller
 
     public function destroy($id)
     {
-        $cart = Carts::where('user_id', Auth::id())->where('id', $id)->firstOrFail();
+        try {
+            $cart = Carts::where('user_id', Auth::id())->where('id', $id)->firstOrFail();
+            $cart->delete();
 
-        if (!$cart) {
-            return $this->formatResponse('error', 'ID cart tidak terbaca!', 401);
+            return $this->formatResponse('success', 'Data berhasil dihapus!', 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Error delete product to cart: ' . $e->getMessage(), [
+                'product_id' => $id,
+                'user_id' => Auth::id(),
+            ]);
+
+            return $this->formatResponse('error', 'Data cart gagal dihapus!', $e->getCode());
         }
-
-        $cart->delete();
-        return $this->formatResponse('success', 'Data berhasil dihapus!', 200);
     }
 
     // private function responses($data)
