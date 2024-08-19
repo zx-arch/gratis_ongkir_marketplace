@@ -124,24 +124,26 @@ class OrderAPIController extends Controller
             $getCarts = $carts->get();
 
             foreach ($getCarts as $cart) {
-                $product = $products->get($cart->product_id);
+                // Akses produk langsung dari koleksi berdasarkan ID
+                if (isset($products[$cart->product_id])) {
+                    $product = $products[$cart->product_id];
 
-                if ($product) {
                     if ($product->stock < $cart->quantity) {
                         throw new \Exception("Kuantitas cart ditemukan melebihi stock produk!", 400);
                     }
 
+                    $price = $product->price * $cart->quantity;
+
                     $record['orderItems'][] = [
                         'product_id' => $cart->product_id,
                         'quantity' => $cart->quantity,
-                        'price' => $product->price * $cart->quantity,
+                        'price' => $price,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ];
 
-                    $record['totalOrderAmount'] += $product->price * $cart->quantity;
+                    $record['totalOrderAmount'] += $price;
 
-                    // Decrease the stock in the associative array
                     $record['updatedProductsStock'][] = [
                         'id' => $cart->product_id,
                         'name' => $product->name,
@@ -152,6 +154,13 @@ class OrderAPIController extends Controller
             }
 
             DB::beginTransaction();
+
+            // Using upsert to update product stocks
+            Products::lockForUpdate()->upsert(
+                $record['updatedProductsStock'],
+                ['id'],
+                ['stock']
+            );
 
             $newOrder = Orders::create([
                 'user_id' => Auth::id(),
@@ -165,13 +174,6 @@ class OrderAPIController extends Controller
             }, $record['orderItems']);
 
             OrderItems::insert($orderItems);
-
-            // Using upsert to update product stocks
-            Products::lockForUpdate()->upsert(
-                $record['updatedProductsStock'],
-                ['id'],
-                ['stock']
-            );
 
             $carts->whereIn('product_id', $productIds)->delete();
 
