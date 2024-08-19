@@ -28,6 +28,10 @@ class CartAPIController extends Controller
             ->where('id', $id)
             ->first();
 
+        if (!$cart) {
+            return $this->formatApiResponse('error', 'Data cart tidak ditemukan!', errorCode: 404);
+        }
+
         return $this->formatApiResponse('success', data: $cart);
     }
 
@@ -146,7 +150,7 @@ class CartAPIController extends Controller
                 'user_id' => Auth::id(),
             ]);
 
-            return $this->formatApiResponse('error', 'Gagal menambah produk ke keranjang!', 500);
+            return $this->formatApiResponse('error', 'Gagal menambah produk ke keranjang!', errorCode: $e->getCode() ?: 500);
         }
     }
 
@@ -171,26 +175,21 @@ class CartAPIController extends Controller
                 'user_id' => Auth::id(),
             ]);
 
-            return $this->formatApiResponse('error', 'Gagal memperbarui cart!', 500);
+            return $this->formatApiResponse('error', 'Gagal memperbarui cart!', errorCode: $e->getCode() ?: 500);
         }
     }
 
     public function destroy($id)
     {
-        try {
-            $cart = Carts::where('user_id', Auth::id())->where('id', $id)->firstOrFail();
-            $cart->delete();
+        $cart = Carts::where('user_id', Auth::id())->where('id', $id)->first();
 
-            return $this->formatApiResponse('success', message: 'Data berhasil dihapus!');
-
-        } catch (\Throwable $e) {
-            Log::error('Error deleting product from cart: ' . $e->getMessage(), [
-                'product_id' => $id,
-                'user_id' => Auth::id(),
-            ]);
-
-            return $this->formatApiResponse('error', 'Gagal menghapus data!', 500);
+        if (!$cart) {
+            return $this->formatApiResponse('error', 'Gagal menghapus data!', errorCode: 500);
         }
+
+        $cart->delete();
+
+        return $this->formatApiResponse('success', message: 'Data berhasil dihapus!');
     }
 
 }
